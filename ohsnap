@@ -1,0 +1,107 @@
+#!/usr/bin/env python
+from __future__ import print_function
+
+from os import mkdir, listdir
+from os.path import join, exists
+from datetime import datetime
+
+from subprocess import check_call
+
+
+from yaml import load
+
+SNAPSHOT_PATH = None
+SUBVOLUMES = None
+REMOTES = None
+
+
+def backup(name, dry_run=True):
+    subvol = SUBVOLUMES[name]
+    src = subvol['src']
+
+    src_path = join(SNAPSHOT_PATH, name)
+    if not exists(src_path) and not dry_run:
+        mkdir(src_path)
+
+    d = datetime.now().strftime('%Y-%m-%d')
+
+    dest_path = join(src_path, d)
+
+    if exists(dest_path):
+        print('Snapshot %s already exists' % dest_path)
+        return
+
+    args = ['btrfs', 'subvolume', 'snapshot', src, dest_path]
+
+    if dry_run:
+        args = ['echo', 'DEBUG:'] + args
+
+    return check_call(args)
+
+def list_snapshots(name):
+    src_path = join(SNAPSHOT_PATH, name)
+    snapshots = sorted(listdir(src_path))
+    print('%s: %s' % (name, ','.join(snapshots)))
+
+
+
+
+import argparse
+
+parser = argparse.ArgumentParser(description='ohsnap btrfs snapshot manager',
+                                 epilog='ohsnap is *highly* *experimental* and'
+                                        ' should not be considered ready for'
+                                        ' any usage.')
+
+parser.add_argument('--config', default='ohsnap_config.yml',
+                    help='Config file to use. Default: ohsnap_config.yml')
+
+actions = parser.add_argument_group('Actions')
+actions.add_argument('-l', '--list', action='store_true',
+                     help='List available snapshots')
+actions.add_argument('--create', action='store_true',
+                     help='Create (daily) snapshot')
+
+match = parser.add_argument_group('Match')
+match.add_argument('-s', '--subvolume', type=str, default=None,
+                   help='Work only on a specific subvolume')
+
+modifiers = parser.add_argument_group('Modifiers')
+modifiers.add_argument('-n', '--dry-run', action='store_true',
+                       default=False,
+                       help='')
+
+args = parser.parse_args()
+
+if all((args.list, args.create)):
+    print('You cannot perform different kinds of actions the same time.')
+    parser.print_help()
+    exit(1)
+
+with open(args.config) as t:
+    c = load(t.read())
+
+from pprint import pprint
+pprint(c)
+SNAPSHOT_PATH = c['snapshot_path']
+SUBVOLUMES = c['subvolumes']
+#REMOTES = c['remotes']
+
+if args.list:
+    if args.subvolume:
+        list_snapshots(args.subvolume)
+    else:
+        for k in SUBVOLUMES:
+            list_snapshots(k)
+
+elif args.create:
+    if args.subvolume:
+        backup(args.subvolume, dry_run=args.dry_run)
+    else:
+        for k in SUBVOLUMES:
+            backup(k, dry_run=args.dry_run)
+
+else:
+    parser.print_help()
+    exit(1)
+

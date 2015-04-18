@@ -1,0 +1,8 @@
+snapshot_path: /mnt/raid/btrfs/snapshots/
+
+subvolumes:
+  home:
+    src: /mnt/raid/foo
+
+  laptop_home:
+    src: /mnt/raid/btrfs/subvolumes/laptop_home
