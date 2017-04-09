@@ -31,19 +31,18 @@ def backup(name, dry_run=True):
         print('Snapshot %s already exists' % dest_path)
         return
 
-    args = ['btrfs', 'subvolume', 'snapshot', src, dest_path]
+    args = ['btrfs', 'subvolume', 'snapshot', '-r', src, dest_path]
 
     if dry_run:
         args = ['echo', 'DEBUG:'] + args
 
     return check_call(args)
 
+
 def list_snapshots(name):
     src_path = join(SNAPSHOT_PATH, name)
     snapshots = sorted(listdir(src_path))
     print('%s: %s' % (name, ','.join(snapshots)))
-
-
 
 
 import argparse
