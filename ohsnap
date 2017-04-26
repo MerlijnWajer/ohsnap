@@ -7,8 +7,9 @@ from datetime import datetime
 
 from subprocess import check_call
 
-
 from yaml import load
+
+import argparse
 
 SNAPSHOT_PATH = None
 SUBVOLUMES = None
@@ -45,7 +46,6 @@ def list_snapshots(name):
     print('%s: %s' % (name, ','.join(snapshots)))
 
 
-import argparse
 
 parser = argparse.ArgumentParser(description='ohsnap btrfs snapshot manager',
                                  epilog='ohsnap is *highly* *experimental* and'
@@ -84,7 +84,7 @@ from pprint import pprint
 pprint(c)
 SNAPSHOT_PATH = c['snapshot_path']
 SUBVOLUMES = c['subvolumes']
-#REMOTES = c['remotes']
+# REMOTES = c['remotes']
 
 if args.list:
     if args.subvolume:
@@ -103,4 +103,3 @@ elif args.create:
 else:
     parser.print_help()
     exit(1)
-
