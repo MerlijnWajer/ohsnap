@@ -11,11 +11,6 @@ from yaml import load
 
 import argparse
 
-SNAPSHOT_PATH = None
-SUBVOLUMES = None
-REMOTES = None
-
-
 def backup(name, dry_run=True):
     subvol = SUBVOLUMES[name]
     src = subvol['src']
@@ -63,21 +58,21 @@ parser.add_argument('--config', default='ohsnap_config.yml',
 actions = parser.add_argument_group('Actions')
 actions.add_argument('-l', '--list', action='store_true',
                      help='List available snapshots')
-actions.add_argument('-L', '--latest', action='store_true',
-                     help='List only newest snapshots')
 actions.add_argument('--create', action='store_true',
                      help='Create (daily) snapshot')
-actions.add_argument('--debug-config', action='store_true',
-                     help='Output interpreted configuration file')
 
 match = parser.add_argument_group('Match')
 match.add_argument('-s', '--subvolume', type=str, default=None,
                    help='Work only on a specific subvolume')
+match.add_argument('-L', '--latest', action='store_true',
+                   help='List/Use only newest snapshots')
 
 modifiers = parser.add_argument_group('Modifiers')
 modifiers.add_argument('-n', '--dry-run', action='store_true',
                        default=False,
                        help='')
+modifiers.add_argument('--debug-config', action='store_true',
+                       help='Output interpreted configuration file')
 
 args = parser.parse_args()
 
@@ -94,14 +89,14 @@ if args.debug_config:
     pprint(c)
 
 SNAPSHOT_PATH = c['snapshot_path']
-SUBVOLUMES = c['subvolumes']
-# REMOTES = c['remotes']
+SUBVOLUMES = c.get('subvolumes', [])
+REMOTES = c.get('remotes', [])
 
 if args.list:
     if args.subvolume:
         list_snapshots(args.subvolume, prefix=False, latest=args.latest)
     else:
-        for k in SUBVOLUMES:
+        for k in SUBVOLUMES.keys() + REMOTES.keys():
             list_snapshots(k, latest=args.latest)
 
 elif args.create:
