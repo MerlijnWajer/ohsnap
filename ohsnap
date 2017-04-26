@@ -40,12 +40,17 @@ def backup(name, dry_run=True):
     return check_call(args)
 
 
-def list_snapshots(name):
+def list_snapshots(name, prefix=True, latest=False):
     src_path = join(SNAPSHOT_PATH, name)
     snapshots = sorted(listdir(src_path))
-    print('%s: %s' % (name, ','.join(snapshots)))
 
+    if latest:
+        snapshots = [snapshots[-1]]
 
+    if prefix:
+        print('%s: %s' % (name, ','.join(snapshots)))
+    else:
+        print(','.join(snapshots))
 
 parser = argparse.ArgumentParser(description='ohsnap btrfs snapshot manager',
                                  epilog='ohsnap is *highly* *experimental* and'
@@ -58,6 +63,8 @@ parser.add_argument('--config', default='ohsnap_config.yml',
 actions = parser.add_argument_group('Actions')
 actions.add_argument('-l', '--list', action='store_true',
                      help='List available snapshots')
+actions.add_argument('-L', '--latest', action='store_true',
+                     help='List only newest snapshots')
 actions.add_argument('--create', action='store_true',
                      help='Create (daily) snapshot')
 actions.add_argument('--debug-config', action='store_true',
@@ -92,10 +99,10 @@ SUBVOLUMES = c['subvolumes']
 
 if args.list:
     if args.subvolume:
-        list_snapshots(args.subvolume)
+        list_snapshots(args.subvolume, prefix=False, latest=args.latest)
     else:
         for k in SUBVOLUMES:
-            list_snapshots(k)
+            list_snapshots(k, latest=args.latest)
 
 elif args.create:
     if args.subvolume:
