@@ -60,6 +60,8 @@ actions.add_argument('-l', '--list', action='store_true',
                      help='List available snapshots')
 actions.add_argument('--create', action='store_true',
                      help='Create (daily) snapshot')
+actions.add_argument('--debug-config', action='store_true',
+                     help='Output interpreted configuration file')
 
 match = parser.add_argument_group('Match')
 match.add_argument('-s', '--subvolume', type=str, default=None,
@@ -80,8 +82,10 @@ if all((args.list, args.create)):
 with open(args.config) as t:
     c = load(t.read())
 
-from pprint import pprint
-pprint(c)
+if args.debug_config:
+    from pprint import pprint
+    pprint(c)
+
 SNAPSHOT_PATH = c['snapshot_path']
 SUBVOLUMES = c['subvolumes']
 # REMOTES = c['remotes']
