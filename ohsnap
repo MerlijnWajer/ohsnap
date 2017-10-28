@@ -145,8 +145,8 @@ if args.debug_config:
     pprint(c)
 
 SNAPSHOT_PATH = c['snapshot_path']
-SUBVOLUMES = c.get('subvolumes', [])
-REMOTES = c.get('remotes', [])
+SUBVOLUMES = c.get('subvolumes', {})
+REMOTES = c.get('remotes', {})
 
 # Merge all volumes into single dict
 ALL = SUBVOLUMES.copy()
