@@ -41,7 +41,10 @@ def _get_snapshots(name, latest=False):
     snapshots = sorted(listdir(src_path))
 
     if latest:
-        snapshots = [snapshots[-1]]
+        if latest is True:
+            snapshots = [snapshots[-1]]
+        else:
+            snapshots = list(filter(lambda x: x > latest, snapshots))
 
     return snapshots
 
@@ -114,6 +117,8 @@ match.add_argument('-x', '--snapshot', type=str, default=None,
                    help='Specify a certain snapshot of a subvolume/remote')
 match.add_argument('-L', '--latest', action='store_true',
                    help='List/Use only newest snapshots')
+match.add_argument('-N', '--next', type=str,
+                   help='List/Use snapshots newer than specified snapshot')
 
 modifiers = parser.add_argument_group('Modifiers')
 modifiers.add_argument('-n', '--dry-run', action='store_true',
@@ -152,6 +157,14 @@ REMOTES = c.get('remotes', {})
 ALL = SUBVOLUMES.copy()
 ALL.update(REMOTES)
 
+# NOTE: If latest is True _get_snapshots will return a list
+# containing only the most recent snapshot for specified targets.
+# Otherwise, if latest is False it will return all snapshots for a target.
+# Finally, if latest is a string, _get_snapshots will return a list of
+# snapshots, more recent than the snapshot specified.
+if args.next:
+    args.latest = args.next
+
 if args.list:
     if args.subvolume:
         list_snapshots(args.subvolume, prefix=False, latest=args.latest)
@@ -169,8 +182,10 @@ elif args.create:
 elif args.send:
     if args.subvolume:
         if not args.latest and args.snapshot is None:
-            print('Must either specify a specific snapshot, or --latest '
-                  'for sending the latest snapshot')
+            print('Must either specify a specific snapshot, or '
+                  '--latest/--next '
+                  'for sending the latest/next snapshot')
+            exit(1)
 
         send(args.subvolume, snapshot=args.snapshot, parent=args.parent,
              dry_run=args.dry_run)
