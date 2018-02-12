@@ -5,20 +5,26 @@ from os import mkdir, listdir
 from os.path import join, exists
 from datetime import datetime
 
-from subprocess import check_call
+from subprocess import check_call, Popen, PIPE
+from time import sleep
 
 from yaml import load
 from json import loads, dumps
 
 import argparse
+import select
+import fcntl
 import sys
+import os
 
 
 # Ohsnap RPC version recognition string
 # This is used by the client to detect server readiness to receive commands
 # The protocol is client driven, at no point will the server act without the
 # client initiating activity.
-ISSUE = '\nohsnap-RPC-v1'
+ISSUE = '\nohsnap-RPC-v1\n'
+#TIMEOUT = 30
+TIMEOUT = 5
 
 
 def backup(name, dry_run=True):
@@ -108,9 +114,14 @@ def listen():
     Start RPC client main loop.
     '''
 
-    print(ISSUE)
+    sys.stdout.write(ISSUE)
+    sys.stdout.flush()
 
-    for line in sys.stdin:
+    while True:
+        line = sys.stdin.readline()
+        if not line:
+            break
+        print('debug server', line, file=sys.stderr)
         cmd = loads(line)
         func = cmd['func']
         pargs = cmd['pargs']
@@ -120,9 +131,101 @@ def listen():
             print('goodbye')
             return
 
-        globals()[func](*pargs, **kargs)
-        print(ISSUE)
+        if func == 'issue':
+            sys.stdout.write(ISSUE)
+            sys.stdout.flush()
+            continue
 
+        globals()[func](*pargs, **kargs)
+        sys.stdout.write(ISSUE)
+        sys.stdout.flush()
+
+
+def try_read(file_obj, timeout=0):
+    r, w, x = select.select([file_obj], [], [], timeout)
+    if not r:
+        return ''
+
+    return file_obj.read()
+
+
+# FIXME, this should try to write buf in its entirety
+def try_write(file_obj, buf, timeout=0):
+    r, w, x = select.select([], [file_obj], [], timeout)
+    if not w:
+        return False
+
+    return file_obj.write(buf)
+
+
+# Set file non-blocking
+def set_nonblock(file_obj):
+    fd = file_obj.fileno()
+    fl = fcntl.fcntl(fd, fcntl.F_GETFL)
+    fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
+
+
+# Start a remote ohsnap instance for RPC
+def start_remote(target):
+    p = Popen(REMOTES[target]['cmd'], shell=True, stdin=PIPE, stdout=PIPE)
+    set_nonblock(p.stdin)
+    set_nonblock(p.stdout)
+
+    return p
+
+
+# Confirm server-side ready
+# This pings the server if no readiness header can be found
+def confirm_ready(remote, failed_once=False, timeout=0):
+    '''
+    Return True if ready, False means otherwise
+    '''
+
+    # Attempt to read RPC header
+    x = try_read(remote.stdout, timeout)
+    if x[-len(ISSUE):] == ISSUE:
+        return True
+
+    # Set if we previously pinged the server
+    if failed_once:
+        return False
+
+    # No RPC header found... ping remote instead
+    _rpc_send_call(remote, 'issue')
+    return confirm_ready(remote, failed_once=True, timeout=TIMEOUT)
+
+
+# Send raw RPC JSON to running server process
+def _rpc_send_call(remote, func, *pargs, **kargs):
+    try_write(remote.stdin,
+              dumps({'func': func, 'pargs': pargs, 'kargs': kargs})+'\n',
+              timeout=TIMEOUT)
+
+
+# Execute RPC call on remote ohsnap instance
+def exec_remote(remote, func, *pargs, **kargs):
+    if not confirm_ready(remote):
+        print('Could not communicate with server')
+        return False
+
+    return _rpc_send_call(remote, func, *pargs, **kargs)
+
+
+# Return remote subvolume name
+def remote_target(target):
+    return REMOTES[target].get('remote_name', target)
+
+
+# List remote snapshots
+def list_remote(target, *pargs, **kargs):
+    remote = start_remote(target)
+    rtarg = remote_target(target)
+
+    exec_remote(remote, 'list_snapshots', rtarg, *pargs, **kargs)
+    print(remote.stdout.readline().strip())
+
+    # Stop RPC service
+    exec_remote(remote, 'quit')
 
 parser = argparse.ArgumentParser(description='ohsnap btrfs snapshot manager',
                                  epilog='ohsnap is *highly* *experimental* and'
@@ -147,6 +250,8 @@ actions.add_argument('-R', '--receive', action='store_true',
 # RPC commandset
 actions.add_argument('-C', '--listen', action='store_true',
                      help='Listen in RPC mode for commands')
+actions.add_argument('-r', '--list-remote', action='store_true',
+                     help='List remote snapshots')
 
 match = parser.add_argument_group('Match')
 match.add_argument('-s', '--subvolume', type=str, default=None,
@@ -239,6 +344,13 @@ elif args.receive:
 
 elif args.listen:
     listen()
+
+elif args.list_remote:
+    if args.subvolume:
+        list_remote(args.subvolume, prefix=False, latest=args.latest)
+    else:
+        for k in REMOTES:
+            list_snapshots(k, latest=args.latest)
 
 else:
     parser.print_help()
