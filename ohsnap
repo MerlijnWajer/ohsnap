@@ -8,8 +8,17 @@ from datetime import datetime
 from subprocess import check_call
 
 from yaml import load
+from json import loads, dumps
 
 import argparse
+import sys
+
+
+# Ohsnap RPC version recognition string
+# This is used by the client to detect server readiness to receive commands
+# The protocol is client driven, at no point will the server act without the
+# client initiating activity.
+ISSUE = '\nohsnap-RPC-v1'
 
 
 def backup(name, dry_run=True):
@@ -90,6 +99,31 @@ def receive(name, dry_run=True):
 
     return check_call(args)
 
+
+# NOTE: By no means is this function meant to be secure
+# this protocol is simply implemented on top of full
+# SSH access as a means for ohsnap to sync multiple snapshots
+def listen():
+    '''
+    Start RPC client main loop.
+    '''
+
+    print(ISSUE)
+
+    for line in sys.stdin:
+        cmd = loads(line)
+        func = cmd['func']
+        pargs = cmd['pargs']
+        kargs = cmd['kargs']
+
+        if func == 'quit':
+            print('goodbye')
+            return
+
+        globals()[func](*pargs, **kargs)
+        print(ISSUE)
+
+
 parser = argparse.ArgumentParser(description='ohsnap btrfs snapshot manager',
                                  epilog='ohsnap is *highly* *experimental* and'
                                         ' should not be considered ready for'
@@ -109,6 +143,10 @@ actions.add_argument('-S', '--send', action='store_true',
                      help='Send snapshot to stdout')
 actions.add_argument('-R', '--receive', action='store_true',
                      help='Receive snapshot from stdin')
+
+# RPC commandset
+actions.add_argument('-C', '--listen', action='store_true',
+                     help='Listen in RPC mode for commands')
 
 match = parser.add_argument_group('Match')
 match.add_argument('-s', '--subvolume', type=str, default=None,
@@ -198,6 +236,9 @@ elif args.receive:
         receive(args.subvolume, dry_run=args.dry_run)
     else:
         print('The remote to receive must be specified')
+
+elif args.listen:
+    listen()
 
 else:
     parser.print_help()
