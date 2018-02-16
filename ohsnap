@@ -23,8 +23,7 @@ import os
 # The protocol is client driven, at no point will the server act without the
 # client initiating activity.
 ISSUE = '\nohsnap-RPC-v1\n'
-#TIMEOUT = 30
-TIMEOUT = 5
+TIMEOUT = 30
 
 
 def backup(name, dry_run=True):
@@ -137,6 +136,7 @@ def listen():
             continue
 
         globals()[func](*pargs, **kargs)
+        sys.stdout.flush()
         sys.stdout.write(ISSUE)
         sys.stdout.flush()
 
@@ -204,7 +204,10 @@ def _rpc_send_call(remote, func, *pargs, **kargs):
 
 # Execute RPC call on remote ohsnap instance
 def exec_remote(remote, func, *pargs, **kargs):
-    if not confirm_ready(remote):
+    # Use a small timeout to prevent application startup
+    # from us receiving the header in case this is the first
+    # command issued.
+    if not confirm_ready(remote, timeout=2):
         print('Could not communicate with server')
         return False
 
