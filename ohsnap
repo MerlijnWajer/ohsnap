@@ -201,7 +201,9 @@ def confirm_ready(remote, failed_once=False, timeout=0):
 
     # Attempt to read RPC header
     x = try_read(remote.stdout, timeout)
+    #print('confirm_ready:', x, ISSUE)
     if x[-len(ISSUE):] == ISSUE:
+        #print('we are ready')
         return True
 
     # Set if we previously pinged the server
@@ -248,6 +250,22 @@ def list_remote(target, *pargs, **kargs):
     # Stop RPC service
     exec_remote(remote, 'quit')
 
+
+# Fetch the next remote snapshot created after our latest local snapshot
+def fetch_next(target, dry_run=True):
+    remote = start_remote(target)
+    rtarg = remote_target(target)
+
+    local_latest = _get_snapshots(target, latest=True)[0]
+
+    exec_remote(remote, 'list_snapshots', rtarg, prefix=False,
+                latest=local_latest)
+    line = try_readline(remote.stdout, TIMEOUT).strip()
+    print('remote latest:', line)
+
+    # Stop RPC service
+    exec_remote(remote, 'quit')
+
 parser = argparse.ArgumentParser(description='ohsnap btrfs snapshot manager',
                                  epilog='ohsnap is *highly* *experimental* and'
                                         ' should not be considered ready for'
@@ -258,6 +276,7 @@ parser.add_argument('--config', default='ohsnap_config.yml',
 parser.add_argument('-p', '--parent', default=None,
                     help='Snapshot to use as parent for incremental sending')
 
+# Basic actions
 actions = parser.add_argument_group('Actions')
 actions.add_argument('-l', '--list', action='store_true',
                      help='List available snapshots')
@@ -269,11 +288,15 @@ actions.add_argument('-R', '--receive', action='store_true',
                      help='Receive snapshot from stdin')
 
 # RPC commandset
+match = parser.add_argument_group('RPC/Remote actions')
 actions.add_argument('-C', '--listen', action='store_true',
                      help='Listen in RPC mode for commands')
 actions.add_argument('-r', '--list-remote', action='store_true',
                      help='List remote snapshots')
+actions.add_argument('-f', '--fetch-next', action='store_true',
+                     help='Fetch next remote snapshot')
 
+# Snapshot matching and filtering
 match = parser.add_argument_group('Match')
 match.add_argument('-s', '--subvolume', type=str, default=None,
                    help='Work only on a specific subvolume')
@@ -284,6 +307,7 @@ match.add_argument('-L', '--latest', action='store_true',
 match.add_argument('-N', '--next', type=str,
                    help='List/Use snapshots newer than specified snapshot')
 
+# Debugging and testing
 modifiers = parser.add_argument_group('Modifiers')
 modifiers.add_argument('-n', '--dry-run', action='store_true',
                        default=False,
@@ -372,6 +396,12 @@ elif args.list_remote:
     else:
         for k in REMOTES:
             list_snapshots(k, latest=args.latest)
+
+elif args.fetch_next:
+    if args.subvolume:
+        fetch_next(args.subvolume, dry_run=args.dry_run)
+    else:
+        print('The remote to fetch must be specified')
 
 else:
     parser.print_help()
