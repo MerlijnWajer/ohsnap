@@ -143,23 +143,6 @@ def listen():
         sys.stdout.flush()
 
 
-def try_read(file_obj, timeout=0):
-    r, w, x = select.select([file_obj], [], [], timeout)
-    if not r:
-        return ''
-
-    return str(file_obj.read(), 'utf-8')
-
-
-# FIXME, this should try to write buf in its entirety
-def try_write(file_obj, buf, timeout=0):
-    r, w, x = select.select([], [file_obj], [], timeout)
-    if not w:
-        return False
-
-    return write(file_obj.fileno(), bytes(buf, 'utf-8'))
-
-
 class NonblockWrapper(object):
     '''
     Convenience class for interacting with processes
@@ -245,6 +228,28 @@ class NonblockWrapper(object):
 
         return True
 
+    def readline(self, timeout=TIMEOUT):
+        '''
+        Read a single line, and return as decoded string
+        '''
+
+        now = monotonic()
+        line = ''
+        dec = codecs.getincrementaldecoder('utf-8')()
+        time_left = timeout
+
+        while self._handle_io_once(time_left):
+            time_left = max(0, timeout - (monotonic() - now))
+
+            while self.read_buf:
+                line += dec.decode(self.read_buf[:1])
+                self.read_buf = self.read_buf[1:]
+                if line[-1] == '\n':
+                    dec.decode(bytes(), True)
+                    return line
+
+        return line
+
     def _begin_decode_strings(self):
         self.dec = codecs.getincrementaldecoder('utf-8')
 
@@ -281,37 +286,16 @@ class NonblockWrapper(object):
 
         # No RPC header found... ping remote instead
         _rpc_send_call(self, 'issue')
-        self.cat()
+        self.cat(output=False)
         return self.confirm_ready(failed_once=True)
+
 
 def passthrough(wrapper_a, wrapper_b):
     pass
 
 
-def handle_io():
-    global read_buf, write_buf
-
-
 def handle_passthrough():
     pass
-
-
-def try_readline(file_obj, timeout=0):
-    now = monotonic()
-    buf = ''
-    while True:
-        time_left = max(0, timeout - (monotonic() - now))
-        r, w, x = select.select([file_obj], [], [], time_left)
-        if not r:
-            break
-        res = True
-        while res:
-            res = str(file_obj.read(1), 'utf-8')
-            buf += res
-            if res == '\n':
-                return buf
-
-    return buf
 
 
 # Set file non-blocking
@@ -339,8 +323,6 @@ def start_receiver(target):
     p = Popen(['btrfs', 'receive', rec_path], stdin=PIPE, stdout=PIPE)
 
     return NonblockWrapper(p)
-
-
 
 
 # Send raw RPC JSON to running server process
@@ -384,7 +366,7 @@ def fetch_next(target, dry_run=True):
 
     exec_remote(remote, 'list_snapshots', rtarg, prefix=False,
                 latest=local_latest)
-    line = try_readline(remote.stdout, TIMEOUT).strip()
+    line = remote.readline().strip()
     if line:
         remote_next = line.split(',')[0]
         print('remote next:', remote_next)
@@ -393,7 +375,7 @@ def fetch_next(target, dry_run=True):
                     snapshot=remote_next, parent=local_latest,
                     dry_run=dry_run)
         if dry_run:
-            print(try_readline(remote.stdout, TIMEOUT).strip())
+            remote.cat()
         else:
             # Passthrough implementation here
             receiver = start_receiver(target)
