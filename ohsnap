@@ -171,6 +171,7 @@ class NonblockWrapper(object):
     read_str = ''
     write_str = ''
     in_fd, out_fd = None, None
+    ready = False
     dec = None
 
     def __init__(self, proc):
@@ -180,33 +181,29 @@ class NonblockWrapper(object):
         self.read_fd = self.proc.stdout.fileno()
         self.write_fd = self.proc.stdin.fileno()
 
-    def cat(self):
+    def cat(self, output=True):
         '''
         Dump remote command output till end
         '''
 
-        self._begin_decode_strings()
-
         while self._handle_io_once():
-            self._decode_strings()
 
             # Check for RPC header
-            if self.read_str.endswith(ISSUE):
-                sys.stdout.write(self.read_str[:-len(ISSUE)])
-                # Error check for trailing bytes
-                # XXX Does potentially introduce a rare bug
-                # where the RPC headers occurs with a few trailing bytes within
-                # a snapshot stream. For now, we'll take our chances.
-                self._end_decode_strings()
-                self.read_str = ISSUE
+            if self.read_buf.endswith(ISSUE_BYTES):
+                if output:
+                    write(sys.stdout.fileno(),
+                          self.read_buf[:-len(ISSUE_BYTES)])
+                self.read_buf = bytes()
+                self.ready = True
                 return
 
-            sys.stdout.write(self.read_str)
-            self.read_str = ''
+            if output:
+                write(sys.stdout.fileno(), self.read_buf)
+            self.read_buf = bytes()
 
-        self._end_decode_strings()
-        sys.stdout.write(self.read_str)
-        self.read_str = ''
+        if output:
+            write(sys.stdout.fileno(), self.read_buf)
+        self.read_buf = bytes()
 
     def read_str(self, count=None):
         if count is None:
@@ -226,7 +223,7 @@ class NonblockWrapper(object):
             if not self.write_buf:
                 break
 
-    def _handle_io_once(self, timeout=0):
+    def _handle_io_once(self, timeout=TIMEOUT):
         '''
         Perform a single attempt to read and write from a non-blocking
         pipe within the specified timeout.
@@ -267,16 +264,15 @@ class NonblockWrapper(object):
 
     # Confirm server-side ready
     # This pings the server if no readiness header can be found
-    def confirm_ready(self, failed_once=False, timeout=0):
+    def confirm_ready(self, failed_once=False):
         '''
         Return True if ready, False means otherwise
+
+        This function resets the state to non-ready.
         '''
 
-        # Attempt to read RPC header
-        x = try_read(remote.stdout, timeout)
-        # print('confirm_ready:', x, ISSUE)
-        if x[-len(ISSUE):] == ISSUE:
-            # print('we are ready')
+        if self.ready:
+            self.ready = False
             return True
 
         # Set if we previously pinged the server
@@ -284,8 +280,9 @@ class NonblockWrapper(object):
             return False
 
         # No RPC header found... ping remote instead
-        _rpc_send_call(remote, 'issue')
-        return confirm_ready(remote, failed_once=True, timeout=TIMEOUT)
+        _rpc_send_call(self, 'issue')
+        self.cat()
+        return self.confirm_ready(failed_once=True)
 
 def passthrough(wrapper_a, wrapper_b):
     pass
@@ -354,7 +351,7 @@ def _rpc_send_call(remote, func, *pargs, **kargs):
 
 # Execute RPC call on remote ohsnap instance
 def exec_remote(remote, func, *pargs, **kargs):
-    if not confirm_ready(remote):
+    if not remote.confirm_ready():
         print('Could not communicate with server')
         return False
 
