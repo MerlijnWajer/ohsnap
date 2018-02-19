@@ -12,6 +12,7 @@ from yaml import load
 from json import loads, dumps
 
 import argparse
+import codecs
 import select
 import fcntl
 import sys
@@ -24,6 +25,7 @@ import os
 # client initiating activity.
 ISSUE = '\nohsnap-RPC-v1\n'
 TIMEOUT = 30
+ISSUE_BYTES = bytes(ISSUE, 'utf-8')
 
 
 def backup(name, dry_run=True):
@@ -158,6 +160,145 @@ def try_write(file_obj, buf, timeout=0):
     return write(file_obj.fileno(), bytes(buf, 'utf-8'))
 
 
+class NonblockWrapper(object):
+    '''
+    Convenience class for interacting with processes
+    over non-blocking pipes.
+    '''
+
+    read_buf = bytes()
+    write_buf = bytes()
+    read_str = ''
+    write_str = ''
+    in_fd, out_fd = None, None
+    dec = None
+
+    def __init__(self, proc):
+        self.proc = proc
+        set_nonblock(self.proc.stdin)
+        set_nonblock(self.proc.stdout)
+        self.read_fd = self.proc.stdout.fileno()
+        self.write_fd = self.proc.stdin.fileno()
+
+    def cat(self):
+        '''
+        Dump remote command output till end
+        '''
+
+        self._begin_decode_strings()
+
+        while self._handle_io_once():
+            self._decode_strings()
+
+            # Check for RPC header
+            if self.read_str.endswith(ISSUE):
+                sys.stdout.write(self.read_str[:-len(ISSUE)])
+                # Error check for trailing bytes
+                # XXX Does potentially introduce a rare bug
+                # where the RPC headers occurs with a few trailing bytes within
+                # a snapshot stream. For now, we'll take our chances.
+                self._end_decode_strings()
+                self.read_str = ISSUE
+                return
+
+            sys.stdout.write(self.read_str)
+            self.read_str = ''
+
+        self._end_decode_strings()
+        sys.stdout.write(self.read_str)
+        self.read_str = ''
+
+    def read_str(self, count=None):
+        if count is None:
+            count = len(self.read_str)
+
+        elif count > len(self.read_str):
+            self._handle_io(rq_read=count)
+
+        rstr = self.read_str[:count]
+        self.read_str = self.read_str[count:]
+
+        return rstr
+
+    def write_str(self, wstr):
+        self.write_buf += bytes(wstr, 'utf-8')
+        while self._handle_io_once():
+            if not self.write_buf:
+                break
+
+    def _handle_io_once(self, timeout=0):
+        '''
+        Perform a single attempt to read and write from a non-blocking
+        pipe within the specified timeout.
+        '''
+
+        r, w, x = select.select([self.read_fd],
+                                [self.write_fd] if self.write_buf else [], [],
+                                timeout)
+        # Handle timeout
+        if not (r or w):
+            return False
+
+        if r:
+            self.read_buf += read(self.read_fd, 8192)
+
+        if w:
+            written = write(self.write_fd, self.write_buf)
+            self.write_buf = self.write_buf[written:]
+
+        return True
+
+    def _begin_decode_strings(self):
+        self.dec = codecs.getincrementaldecoder('utf-8')
+
+    def _decode_strings(self):
+        self.read_str += self.dec.decode(self.read_buf)
+        self.read_buf = bytes()
+
+    def _end_decode_strings(self):
+        self._decode_strings()
+        self.read_str += self.dec.decode(bytes(), True)
+
+    def _handle_io(self, write_op=False, timeout=0):
+        now = monotonic()
+        while True:
+            time_left = max(0, timeout - (monotonic() - now))
+            self._handle_io_once(time_left)
+
+    # Confirm server-side ready
+    # This pings the server if no readiness header can be found
+    def confirm_ready(self, failed_once=False, timeout=0):
+        '''
+        Return True if ready, False means otherwise
+        '''
+
+        # Attempt to read RPC header
+        x = try_read(remote.stdout, timeout)
+        # print('confirm_ready:', x, ISSUE)
+        if x[-len(ISSUE):] == ISSUE:
+            # print('we are ready')
+            return True
+
+        # Set if we previously pinged the server
+        if failed_once:
+            return False
+
+        # No RPC header found... ping remote instead
+        _rpc_send_call(remote, 'issue')
+        return confirm_ready(remote, failed_once=True, timeout=TIMEOUT)
+
+def passthrough(wrapper_a, wrapper_b):
+    pass
+
+
+def handle_io():
+    global read_buf, write_buf
+
+
+def handle_passthrough():
+    pass
+
+
 def try_readline(file_obj, timeout=0):
     now = monotonic()
     buf = ''
@@ -186,48 +327,34 @@ def set_nonblock(file_obj):
 # Start a remote ohsnap instance for RPC
 def start_remote(target):
     p = Popen(REMOTES[target]['cmd'], shell=True, stdin=PIPE, stdout=PIPE)
-    set_nonblock(p.stdin)
-    set_nonblock(p.stdout)
 
-    return p
+    wrap = NonblockWrapper(p)
+    # Wait for RPC server to respond
+    # This passes through remote stdout until the
+    # RPC header occurs
+    wrap.cat()
+
+    return wrap
 
 
-# Confirm server-side ready
-# This pings the server if no readiness header can be found
-def confirm_ready(remote, failed_once=False, timeout=0):
-    '''
-    Return True if ready, False means otherwise
-    '''
+# Start a receiver process
+def start_receiver(target):
+    p = Popen(['btrfs', 'receive', rec_path], stdin=PIPE, stdout=PIPE)
 
-    # Attempt to read RPC header
-    x = try_read(remote.stdout, timeout)
-    # print('confirm_ready:', x, ISSUE)
-    if x[-len(ISSUE):] == ISSUE:
-        # print('we are ready')
-        return True
+    return NonblockWrapper(p)
 
-    # Set if we previously pinged the server
-    if failed_once:
-        return False
 
-    # No RPC header found... ping remote instead
-    _rpc_send_call(remote, 'issue')
-    return confirm_ready(remote, failed_once=True, timeout=TIMEOUT)
 
 
 # Send raw RPC JSON to running server process
 def _rpc_send_call(remote, func, *pargs, **kargs):
-    try_write(remote.stdin,
-              dumps({'func': func, 'pargs': pargs, 'kargs': kargs})+'\n',
-              timeout=TIMEOUT)
+    remote.write_str(dumps({'func': func, 'pargs': pargs,
+                     'kargs': kargs})+'\n')
 
 
 # Execute RPC call on remote ohsnap instance
 def exec_remote(remote, func, *pargs, **kargs):
-    # Use a small timeout to prevent application startup
-    # from us receiving the header in case this is the first
-    # command issued.
-    if not confirm_ready(remote, timeout=2):
+    if not confirm_ready(remote):
         print('Could not communicate with server')
         return False
 
@@ -245,7 +372,7 @@ def list_remote(target, *pargs, **kargs):
     rtarg = remote_target(target)
 
     exec_remote(remote, 'list_snapshots', rtarg, *pargs, **kargs)
-    print(try_readline(remote.stdout, TIMEOUT).strip())
+    remote.cat()
 
     # Stop RPC service
     exec_remote(remote, 'quit')
@@ -272,7 +399,7 @@ def fetch_next(target, dry_run=True):
             print(try_readline(remote.stdout, TIMEOUT).strip())
         else:
             # Passthrough implementation here
-            pass
+            receiver = start_receiver(target)
 
     # Stop RPC service
     exec_remote(remote, 'quit')
