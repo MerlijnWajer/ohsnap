@@ -201,9 +201,9 @@ def confirm_ready(remote, failed_once=False, timeout=0):
 
     # Attempt to read RPC header
     x = try_read(remote.stdout, timeout)
-    #print('confirm_ready:', x, ISSUE)
+    # print('confirm_ready:', x, ISSUE)
     if x[-len(ISSUE):] == ISSUE:
-        #print('we are ready')
+        # print('we are ready')
         return True
 
     # Set if we previously pinged the server
@@ -261,7 +261,18 @@ def fetch_next(target, dry_run=True):
     exec_remote(remote, 'list_snapshots', rtarg, prefix=False,
                 latest=local_latest)
     line = try_readline(remote.stdout, TIMEOUT).strip()
-    print('remote latest:', line)
+    if line:
+        remote_next = line.split(',')[0]
+        print('remote next:', remote_next)
+
+        exec_remote(remote, 'send', rtarg,
+                    snapshot=remote_next, parent=local_latest,
+                    dry_run=dry_run)
+        if dry_run:
+            print(try_readline(remote.stdout, TIMEOUT).strip())
+        else:
+            # Passthrough implementation here
+            pass
 
     # Stop RPC service
     exec_remote(remote, 'quit')
