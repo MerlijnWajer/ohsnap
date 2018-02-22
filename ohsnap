@@ -74,9 +74,9 @@ def list_snapshots(name, prefix=True, latest=False):
         print(','.join(snapshots))
 
 
-def send(name, snapshot=None, parent=None, dry_run=True):
+def send(name, snapshot=None, parent=None, latest=True, dry_run=True):
     if snapshot is None:
-        snapshot = _get_snapshots(name, latest=True)[0]
+        snapshot = _get_snapshots(name, latest=latest)[0]
 
     send_path = join(SNAPSHOT_PATH, name)
 
@@ -486,14 +486,18 @@ elif args.create:
 
 elif args.send:
     if args.subvolume:
-        if not args.latest and args.snapshot is None:
+        if args.latest:
+            send(args.subvolume, latest=args.latest, parent=args.parent,
+                 dry_run=args.dry_run)
+        elif args.snapshot is not None:
+            send(args.subvolume, snapshot=args.snapshot, parent=args.parent,
+                 dry_run=args.dry_run)
+        else:
             print('Must either specify a specific snapshot, or '
                   '--latest/--next '
                   'for sending the latest/next snapshot')
             exit(1)
 
-        send(args.subvolume, snapshot=args.snapshot, parent=args.parent,
-             dry_run=args.dry_run)
     else:
         print('The subvolume to send must be specified')
         exit(1)
